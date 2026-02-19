@@ -13,7 +13,7 @@ module.exports = {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#ffffff"
       },
-      package: "com.anonymous.chatfrontend",
+      package: "com.vikas.Chatapp",
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON
     },
     plugins: [
