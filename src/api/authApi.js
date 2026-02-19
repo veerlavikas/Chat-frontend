@@ -1,17 +1,23 @@
 import axios from "axios";
+import auth from '@react-native-firebase/auth';
 
-const BASE_URL = "https://chat-backend-9v66.onrender.com/auth";
+const BASE_URL = "https://chat-backend-9v66.onrender.com"; // Removed /auth
 
-// Step 1: Request the OTP
-export const requestOtp = (phone) => {
-  return axios.post(`${BASE_URL}/send-otp`, { phone });
-};
+export const api = axios.create({
+  baseURL: BASE_URL,
+});
 
-// Step 2: Verify OTP and Create User
-export const verifyAndSignup = (data) => {
-  return axios.post(`${BASE_URL}/verify-signup`, data);
-};
-
-export const login = (data) => {
-  return axios.post(`${BASE_URL}/login`, data);
-};
+// ✅ Automatically attach the Firebase Token to EVERY request
+api.interceptors.request.use(async (config) => {
+  const currentUser = auth().currentUser;
+  
+  if (currentUser) {
+    // Get a fresh token from Firebase
+    const token = await currentUser.getIdToken();
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  
+  return config;
+}, (error) => {
+  return Promise.reject(error);
+});

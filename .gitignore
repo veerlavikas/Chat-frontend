@@ -40,5 +40,5 @@ yarn-error.*
 /ios
 /android
 # Firebase Native Configs
-# google-services.json
+google-services.json
 GoogleService-Info.plist

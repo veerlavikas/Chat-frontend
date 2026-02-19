@@ -9,21 +9,25 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Alert, // Added Alert for permission denials
+  Alert,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import axios from "axios";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { fetchChatHistory, sendMessage, uploadMediaApi } from "../api/chatApi";
 import { connectSocket, sendWS } from "../utils/socket";
 import ChatBubble from "../components/ChatBubble";
 
 const BASE_IMG = "https://chat-backend-9v66.onrender.com/uploads/profile/";
+const BASE_URL = "https://chat-backend-9v66.onrender.com";
+const META_AI_LOGO = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Meta-Logo.png";
 
 export default function ChatScreen({ route, navigation }) {
-  const insets = useSafeAreaInsets(); // Hook to detect notch/safe area
+  const insets = useSafeAreaInsets();
   const { senderId, receiver } = route.params;
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
@@ -32,117 +36,154 @@ export default function ChatScreen({ route, navigation }) {
 
   useEffect(() => {
     load();
-    connectSocket(senderId, onReceive, onTyping);
+    connectSocket(senderId, onReceive, onTypingEvent);
+    markAsSeen();
   }, []);
 
   const load = async () => {
-    const data = await fetchChatHistory(senderId, receiver.id);
+    // Fetch history based on whether it's a group or private chat
+    const data = await fetchChatHistory(
+        senderId, 
+        receiver.isGroup ? null : receiver.id, 
+        receiver.isGroup ? receiver.id : null
+    );
     setMessages(data || []);
   };
 
-  const onReceive = (msg) => {
-    setMessages((p) => [...p, msg]);
-    setTyping(false);
+  const markAsSeen = async () => {
+    try {
+      const token = await AsyncStorage.getItem("token");
+      if (token && !receiver.isBot) {
+        // ✅ Swapped order to senderId/receiverId to resolve 404 errors
+        await axios.put(`${BASE_URL}/api/chat/seen/${senderId}/${receiver.id}`, {}, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+      }
+    } catch (err) {
+      console.log("Failed to mark seen:", err.message);
+    }
   };
 
-  const onTyping = () => setTyping(true);
+  const onReceive = (msg) => {
+    const isRelevant = receiver.isGroup 
+        ? msg.groupId === receiver.id 
+        : (msg.senderId === receiver.id || msg.receiverId === receiver.id);
+
+    if (isRelevant) {
+        setMessages((p) => [...p, msg]);
+        setTyping(false);
+        markAsSeen(); 
+    }
+  };
+
+  const onTypingEvent = (data) => {
+    if (data.from === receiver.id) {
+      setTyping(data.typing); 
+    }
+  };
 
   const onSend = async () => {
     if (!text.trim()) return;
-    const msg = await sendMessage({
+    const msgData = {
       senderId,
-      receiverId: receiver.id,
+      receiverId: receiver.isGroup ? null : receiver.id,
+      groupId: receiver.isGroup ? receiver.id : null,
       content: text,
-    });
+    };
+    const msg = await sendMessage(msgData);
     if (msg) {
       setMessages((p) => [...p, msg]);
       setText("");
     }
   };
 
-  /* ✅ FIXED MEDIA PICKER WITH PERMISSIONS */
   const handleMediaPick = async (type) => {
-    // 1. Ask for Permission First
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-        Alert.alert("Permission Required", "We need access to your gallery to send images.");
-        return;
-    }
+    try {
+        let result;
+        if (type === 'IMAGE') {
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert("Permission Required", "Need gallery access to send images.");
+                return;
+            }
 
-    let result;
-    if (type === 'IMAGE') {
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images, // Corrected to Options
-        quality: 0.7,
-        allowsEditing: true,
-      });
-    } else {
-      result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
-    }
+            result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'], // ✅ Updated Syntax for Expo
+                quality: 0.7,
+                allowsEditing: true,
+            });
+        } else {
+            // ✅ Document Picker Logic
+            result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
+        }
 
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      
-      const localMsg = {
-        id: Date.now(),
-        senderId,
-        mediaUrl: asset.uri,
-        createdAt: new Date().toISOString(),
-        type: type,
-        status: 0, 
-      };
-      setMessages((p) => [...p, localMsg]);
+        if (!result.canceled) {
+            const asset = result.assets[0];
+            
+            // Only show local preview for Images
+            if (type === 'IMAGE') {
+                const localMsg = {
+                    id: Date.now(),
+                    senderId,
+                    mediaUrl: asset.uri,
+                    createdAt: new Date().toISOString(),
+                    type: 'IMAGE',
+                    status: 0, 
+                };
+                setMessages((p) => [...p, localMsg]);
+            }
 
-      try {
-        const uploadedUrl = await uploadMediaApi(asset);
-        sendWS("/app/chat.send", {
-          senderId,
-          receiverId: receiver.id,
-          mediaUrl: uploadedUrl,
-          type: type,
-        });
-      } catch (err) {
-        console.error("Upload failed", err);
-        Alert.alert("Upload Failed", "Could not send the file. Please try again.");
-      }
+            const uploadedUrl = await uploadMediaApi(asset);
+            sendWS("/app/chat.send", {
+                senderId,
+                receiverId: receiver.isGroup ? null : receiver.id,
+                groupId: receiver.isGroup ? receiver.id : null,
+                mediaUrl: uploadedUrl,
+                type: type,
+            });
+        }
+    } catch (error) {
+        console.error("Media Pick Error:", error);
+        Alert.alert("Error", "Could not select file.");
     }
   };
 
   const onType = (t) => {
     setText(t);
-    sendWS("/app/typing", { from: senderId, to: receiver.id });
+    if (!receiver.isBot) {
+        sendWS("/app/typing", { from: senderId, to: receiver.id, typing: true });
+    }
   };
 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: "#0B1220" }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0} 
     >
-      {/* Container with dynamic Safe Area Padding */}
       <View style={[styles.container, { paddingTop: insets.top }]}> 
         
         {/* HEADER */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Icon name="arrow-back" size={22} color="#fff" />
+            <Icon name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
 
           <Image
             source={{
-              uri: receiver.profilePic
-                ? BASE_IMG + receiver.profilePic
-                : "https://i.pravatar.cc/100",
+              uri: receiver.isBot ? META_AI_LOGO : (receiver.profilePic ? BASE_IMG + receiver.profilePic : "https://i.pravatar.cc/100"),
             }}
             style={styles.avatar}
           />
 
-          <View style={{ flex: 1 }}>
+          <TouchableOpacity 
+            style={{ flex: 1 }} 
+            onPress={() => receiver.isGroup && navigation.navigate("GroupInfo", { groupId: receiver.id, groupName: receiver.username })}
+          >
             <Text style={styles.name}>{receiver.username}</Text>
             <Text style={styles.lastSeen}>
-              {typing ? "typing..." : "last seen recently"}
+              {typing ? "typing..." : receiver.isBot ? "AI Assistant" : "online"}
             </Text>
-          </View>
+          </TouchableOpacity>
 
           <TouchableOpacity onPress={() => navigation.navigate("Call", { type: "audio", user: receiver })}>
             <Icon name="call-outline" size={22} color="#fff" />
@@ -194,34 +235,11 @@ export default function ChatScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 }, 
-  header: {
-    height: 60,
-    backgroundColor: "#0A84FF",
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-  },
-  avatar: { width: 36, height: 36, borderRadius: 18, margin: 10 },
+  header: { height: 60, backgroundColor: "#0A84FF", flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
+  avatar: { width: 40, height: 40, borderRadius: 20, marginHorizontal: 10 },
   name: { color: "#fff", fontSize: 16, fontWeight: "600" },
   lastSeen: { color: "#E5E7EB", fontSize: 12 },
-  inputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 10,
-    backgroundColor: "#121A2F",
-  },
-  input: {
-    flex: 1,
-    backgroundColor: "#1F2937",
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    marginHorizontal: 10,
-    color: "#fff",
-    height: 40,
-  },
-  sendBtn: {
-    backgroundColor: "#0A84FF",
-    padding: 10,
-    borderRadius: 20,
-  },
+  inputRow: { flexDirection: "row", alignItems: "center", padding: 10, backgroundColor: "#121A2F" },
+  input: { flex: 1, backgroundColor: "#1F2937", borderRadius: 20, paddingHorizontal: 14, marginHorizontal: 10, color: "#fff", height: 40 },
+  sendBtn: { backgroundColor: "#0A84FF", padding: 10, borderRadius: 20 },
 });
