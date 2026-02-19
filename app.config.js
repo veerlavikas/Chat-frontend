@@ -7,24 +7,23 @@ module.exports = {
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
     newArchEnabled: true,
-    ios: { "supportsTablet": true },
+    ios: { supportsTablet: true },
     android: {
-      adaptiveIcon: { 
-        "foregroundImage": "./assets/adaptive-icon.png", 
-        "backgroundColor": "#ffffff" 
+      adaptiveIcon: {
+        foregroundImage: "./assets/adaptive-icon.png",
+        backgroundColor: "#ffffff"
       },
       package: "com.anonymous.chatfrontend",
-      // ✅ This is the critical link to your "Sensitive" variable
-      googleServicesFile: process.env.GOOGLE_SERVICES_JSON || "./google-services.json" 
+      googleServicesFile: process.env.GOOGLE_SERVICES_JSON
     },
     plugins: [
       "@react-native-firebase/app",
       "@react-native-firebase/auth"
     ],
-    extra: { 
-      eas: { 
-        projectId: "df207cff-6a07-4ee3-a455-b196be3259ac" 
-      } 
+    extra: {
+      eas: {
+        projectId: "df207cff-6a07-4ee3-a455-b196be3259ac"
+      }
     }
   }
 };
